@@ -61,7 +61,7 @@ class MPTClient:
 
     def health(self) -> dict:
         try:
-            resp = self._client.get("/health", headers=self._headers())
+            resp = self._client.get("/ping", headers=self._headers())
         except httpx.HTTPError as exc:
             raise MPTError("MPT health transport error: " + str(exc), code="TRANSIENT") from exc
         if resp.status_code != 200:
@@ -69,9 +69,9 @@ class MPTClient:
         return {"ok": True}
 
     def submit_job(self, params: dict) -> dict:
-        """POST /v1/videos with MPT task params; returns created task data."""
+        """POST /api/v1/videos with MPT task params; returns created task data."""
         try:
-            resp = self._client.post("/v1/videos", json=params, headers=self._headers())
+            resp = self._client.post("/api/v1/videos", json=params, headers=self._headers())
         except httpx.HTTPError as exc:
             raise MPTError("MPT submit transport error: " + str(exc), code="TRANSIENT") from exc
         if resp.status_code != 200:
@@ -82,7 +82,7 @@ class MPTClient:
         return data.get("data", {})
 
     def get_status(self, task_id: str) -> MPTTaskResult:
-        data = self._get("/v1/stream/" + task_id, params={"task_id": task_id})
+        data = self._get("/api/v1/tasks/" + task_id, params={"task_id": task_id})
         state = data.get("state", "")
         videos = list(data.get("videos", []) or []) + list(data.get("combinedVideos", []) or [])
         if not state:

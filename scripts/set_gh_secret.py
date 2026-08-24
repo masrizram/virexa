@@ -1,45 +1,43 @@
 #!/usr/bin/env python
-"""Set FLY_CI_DEPLOY_TOKEN as a GitHub Actions secret on masrizram/virexa.
-Uses repo-scope GitHub token from git credential helper; encrypts with PyNaCl
-via libsodium sealed box (GitHub API requirement).
-Requires: pip install pynacl (once).
+"""Set multiple Fly deploy tokens as GitHub Actions secrets (one per app).
+Env: GH_TOKEN (github token), FLY_API_TOKEN (flyctl token from operator machine)
 """
 import base64
 import json
 import os
 import subprocess
-import sys
 import urllib.request
 
 REPO = "masrizram/virexa"
+APPS = ["virexa-api", "virexa-web", "virexa-windmill", "virexa-windmill-worker", "virexa-video"]
 
-# 1. GitHub token: env GH_TOKEN wins, else git credential helper
-gh_token = os.environ.get("GH_TOKEN")
-if not gh_token:
-    cred = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
-                          capture_output=True, text=True).stdout
-    gh_token = [l.split("=", 1)[1] for l in cred.splitlines() if l.startswith("password=")][0]
+gh_token = os.environ["GH_TOKEN"]
+fly_operator_token = os.environ["FLY_API_TOKEN"]  # for creating tokens via flyctl locally
 
-# 2. Fly deploy token from env
-fly_token = os.environ["FLY_TOKEN"]
-
-# 3. Get repo public key
+# Get repo public key
 req = urllib.request.Request(f"https://api.github.com/repos/{REPO}/actions/secrets/public-key",
                              headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github+json"})
 pk = json.load(urllib.request.urlopen(req))
 
-# 4. Encrypt (libsodium sealed box)
 from nacl import encoding, public
-
 key = public.PublicKey(pk["key"].encode(), encoding.Base64Encoder())
-sealed = public.SealedBox(key).encrypt(fly_token.encode())
-b64 = base64.b64encode(sealed).decode()
 
-# 5. PUT secret
-req = urllib.request.Request(
-    f"https://api.github.com/repos/{REPO}/actions/secrets/FLY_CI_DEPLOY_TOKEN",
-    data=json.dumps({"encrypted_value": b64, "key_id": pk["key_id"]}).encode(),
-    headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github+json"},
-    method="PUT")
-resp = urllib.request.urlopen(req)
-print("secret set:", resp.status)
+def set_secret(name: str, value: str):
+    sealed = public.SealedBox(key).encrypt(value.encode())
+    b64 = base64.b64encode(sealed).decode()
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/actions/secrets/{name}",
+        data=json.dumps({"encrypted_value": b64, "key_id": pk["key_id"]}).encode(),
+        headers={"Authorization": f"Bearer {gh_token}", "Accept": "application/vnd.github+json"},
+        method="PUT")
+    resp = urllib.request.urlopen(req)
+    print(f"{name}: {resp.status}")
+
+for app in APPS:
+    out = subprocess.run(["flyctl", "tokens", "create", "deploy", "-a", app],
+                         capture_output=True, text=True)
+    token = out.stdout.strip()
+    if token.startswith("FlyV1 ") or token.startswith("FlyV2 ") or len(token) < 100:
+        set_secret(f"FLY_TOKEN_{app.upper().replace('-', '_')}", token)
+    else:
+        print(f"{app}: FAILED to create token: {out.stderr[:200]}")

@@ -32,9 +32,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
-          enable-cache: true
+          enable-cache: false
       - run: uv sync
-      - run: uv run ruff check app || true
       - run: uv run pytest -q
         env:
           APP_DATABASE_URL: postgresql+psycopg://virexa:virexa_dev@localhost:5432/content_os
@@ -47,7 +46,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy apps/api --strategy rolling --wait-timeout 900
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_API }}
 
   deploy-windmill-server:
     needs: ci
@@ -57,7 +56,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy services/windmill --config services/windmill/fly.server.toml --strategy rolling --wait-timeout 900
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_WINDMILL }}
 
   deploy-windmill-worker:
     needs: ci
@@ -67,7 +66,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy services/windmill --config services/windmill/fly.worker.toml --strategy rolling --wait-timeout 900
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_WINDMILL_WORKER }}
 
   deploy-video:
     needs: ci
@@ -77,7 +76,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy services/moneyprinterturbo --strategy rolling --wait-timeout 900
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_VIDEO }}
 
   deploy-web:
     needs: [ci, deploy-api]
@@ -87,13 +86,12 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - run: flyctl deploy apps/control-center --strategy rolling --wait-timeout 900
         env:
-          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_WEB }}
 
   verify:
     needs: [deploy-api, deploy-web]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - name: Post-deploy smoke
         run: |
           sleep 20
