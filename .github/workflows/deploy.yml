@@ -1,0 +1,102 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: virexa
+          POSTGRES_PASSWORD: virexa_dev
+          POSTGRES_DB: content_os
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U virexa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - run: uv sync
+      - run: uv run ruff check app || true
+      - run: uv run pytest -q
+        env:
+          APP_DATABASE_URL: postgresql+psycopg://virexa:virexa_dev@localhost:5432/content_os
+
+  deploy-api:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy apps/api --strategy rolling --wait-timeout 900
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+
+  deploy-windmill-server:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy services/windmill --config services/windmill/fly.server.toml --strategy rolling --wait-timeout 900
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+
+  deploy-windmill-worker:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy services/windmill --config services/windmill/fly.worker.toml --strategy rolling --wait-timeout 900
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+
+  deploy-video:
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy services/moneyprinterturbo --strategy rolling --wait-timeout 900
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+
+  deploy-web:
+    needs: [ci, deploy-api]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy apps/control-center --strategy rolling --wait-timeout 900
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_CI_DEPLOY_TOKEN }}
+
+  verify:
+    needs: [deploy-api, deploy-web]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Post-deploy smoke
+        run: |
+          sleep 20
+          curl -sf -m 30 https://virexa-api.fly.dev/healthz
+          curl -sf -m 30 -o /dev/null -w "web:%{http_code}\n" https://virexa-web.fly.dev/
+          curl -sf -m 30 -o /dev/null -w "windmill:%{http_code}\n" https://virexa-windmill.fly.dev/
