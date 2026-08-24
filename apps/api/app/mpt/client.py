@@ -137,10 +137,10 @@ class MPTClient:
             raise MPTError("MPT video URL missing", code="VALIDATION")
         if url.startswith("http"):
             fetch_path = url
-        elif url.startswith("/"):
-            fetch_path = "/api/v1/download" + url
         else:
-            fetch_path = "/api/v1/download/" + url
+            # MPT serves task files directly at the root path (/tasks/{id}/final-1.mp4),
+            # verified live: 200 with bytes; the /api/v1/download prefix 404s.
+            fetch_path = url if url.startswith("/") else "/" + url
         resp = self._client.get(fetch_path, headers=self._headers())
         if resp.status_code != 200:
             raise MPTError("MPT download status " + str(resp.status_code), code="TRANSIENT")
