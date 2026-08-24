@@ -1,0 +1,14 @@
+# root .gitignore
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.next/
+.venv/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+.storage/
+storage/

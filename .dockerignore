@@ -1,0 +1,21 @@
+# --- root ---
+.git
+**/.git
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+.next/
+**/.next/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+# keep deployment artifacts out of build context
+**/storage/
