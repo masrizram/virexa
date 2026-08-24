@@ -5,14 +5,14 @@ Costs are recorded as cost_events rows; budgets enforced per UTC day.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.core.safety import BudgetExceededError
 from app.models.business import CostEvent
-from app.services.state_service import get_setting, set_setting
+from app.services.state_service import get_setting
 
 BUDGETS_KEY = "budgets"
 

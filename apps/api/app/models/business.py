@@ -33,7 +33,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import JSONMixin, TimestampMixin, UUIDMixin, now_utc
 
-
 # ---------------------------------------------------------------------------
 # Identity / platform accounts
 # ---------------------------------------------------------------------------
@@ -203,7 +202,8 @@ class VideoJob(UUIDMixin, TimestampMixin):
     __table_args__ = (Index("ix_video_jobs_status", "status"),)
 
     content_item_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("content_items.id"), nullable=False)
-    script_version_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("script_versions.id"), nullable=True)
+    script_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("script_versions.id"), nullable=True)
     mpt_task_id: Mapped[str] = mapped_column(String(128), default="", nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), default="SUBMITTED", nullable=False)
     params: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
@@ -317,7 +317,8 @@ class Response(UUIDMixin, TimestampMixin):
     __table_args__ = (UniqueConstraint("interaction_id", name="uq_response_interaction"),)
 
     interaction_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interactions.id"), nullable=False)
-    action: Mapped[str] = mapped_column(String(32), nullable=False)  # AUTO_REPLY / DRAFT / HUMAN_REQUIRED / IGNORE
+    # AUTO_REPLY / DRAFT / HUMAN_REQUIRED / IGNORE
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
     draft_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     sent_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="DRAFT", nullable=False)
@@ -350,8 +351,10 @@ class MetricSnapshot(UUIDMixin, TimestampMixin):
 
     published_post_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("published_posts.id"), nullable=False)
     metric_key: Mapped[str] = mapped_column(String(48), nullable=False)
-    value: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)  # NULL = unsupported (spec §38)
-    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc, nullable=False)
+    # NULL = unsupported (spec §38)
+    value: Mapped[float | None] = mapped_column(Numeric(18, 4), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, nullable=False)
     source: Mapped[str] = mapped_column(String(32), default="platform_api", nullable=False)
 
 
@@ -375,7 +378,8 @@ class Experiment(UUIDMixin, TimestampMixin):
 
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     hypothesis: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    dimension: Mapped[str] = mapped_column(String(48), nullable=False)  # topic/angle/hook/duration/format/cta/platform
+    # topic/angle/hook/duration/format/cta/platform
+    dimension: Mapped[str] = mapped_column(String(48), nullable=False)
     variant_a: Mapped[str] = mapped_column(JSONB, default=dict, nullable=False)
     variant_b: Mapped[str] = mapped_column(JSONB, default=dict, nullable=False)
     status: Mapped[str] = mapped_column(String(24), default="RUNNING", nullable=False)
@@ -404,7 +408,8 @@ class CostEvent(UUIDMixin, TimestampMixin):
     __tablename__ = "cost_events"
     __table_args__ = (Index("ix_cost_events_day", "created_at"),)
 
-    category: Mapped[str] = mapped_column(String(32), nullable=False)  # llm / video / storage / platform / infra
+    # llm / video / storage / platform / infra
+    category: Mapped[str] = mapped_column(String(32), nullable=False)
     amount: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
     currency: Mapped[str] = mapped_column(String(8), default="USD", nullable=False)
     content_item_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("content_items.id"), nullable=True)

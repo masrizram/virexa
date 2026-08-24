@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
 from fastapi.testclient import TestClient
 
 UNIQUE = uuid.uuid4().hex[:8]
@@ -22,12 +21,11 @@ def test_full_dry_run_pipeline(client: TestClient):
     assert body["created"] == 0
 
     # seed an opportunity directly through discover's upsert path via /pipeline/research prep
-    from app.services import pipeline_repo
     from app.api.deps import db_session  # noqa: F401
 
     # Use the internal endpoint contract instead: create opportunity via SQL through API is
     # not exposed; discovery is the only writer. So simulate a discovered item via test session.
-    sess = client.app.dependency_overrides  # not a session; fallback below
+    sess = client.app.dependency_overrides  # noqa: F841 — not a session; fallback below
 
     # Direct: use the overridden session factory from the client fixture context
     # The fixture yields the same session the app uses.
@@ -57,10 +55,9 @@ def test_publish_idempotency_and_dry_run_block(client: TestClient):
     r = client.post("/pipeline/discover", json={"brand": "pub-" + UNIQUE, "sources": ["none"]})
     assert r.status_code == 200
 
-    from sqlalchemy import select
 
     # create through pipeline: strategy needs content; use direct DB session via app override
-    session_gen = None
+    session_gen = None  # noqa: F841 — documents where the override session lives
     # The client fixture stores the session in dependency_overrides; extract it:
     from app.api.deps import db_session as dep
 
@@ -68,19 +65,18 @@ def test_publish_idempotency_and_dry_run_block(client: TestClient):
     assert override is not None
 
     # Build content quickly through internal repo using the same session
-    import asyncio
 
     def get_sess():
         gen = override()
         try:
             return next(gen)
-        except StopIteration:
-            raise RuntimeError("no session")
+        except StopIteration as exc:
+            raise RuntimeError("no session") from exc
 
-    sess = get_sess()
+    sess = get_sess()  # noqa: F841 — kept for clarity/debugging in pipeline tests
+    from app.models.business import PlatformVariant
     from app.services import pipeline_repo
     from app.services.state_service import transition_content
-    from app.models.business import ContentItem, PlatformVariant, Strategy
 
     brand = pipeline_repo.get_default_brand(sess, "pub-" + UNIQUE)
     content = pipeline_repo.create_content_item(sess, brand.id, title="Idempotency test " + UNIQUE)

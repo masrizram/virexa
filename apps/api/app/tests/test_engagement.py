@@ -1,5 +1,5 @@
 """Engagement classification + response policy tests (spec §36-37)."""
-from app.engines.engagement import classify_and_decide, decide_action, risk_score
+from app.engines.engagement import classify_and_decide, decide_action
 
 
 def test_question_low_risk_auto():

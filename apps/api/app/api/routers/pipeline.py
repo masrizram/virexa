@@ -6,7 +6,6 @@ Each endpoint is idempotent-safe for its stage and writes audit events.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -15,13 +14,11 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import db_session
 from app.core.config import get_settings
-from app.core.safety import SafetyBlockedError, side_effect_allowed
-from app.core.state import StateTransitionError
+from app.core.safety import side_effect_allowed
 from app.engines import adaptation as adaptation_engine
 from app.engines import qc as qc_engine
 from app.engines.discovery import (
     ConnectorResult,
-    DiscoveredItem,
     discover_hackernews,
     discover_reddit,
     discover_rss,
@@ -336,7 +333,7 @@ def create_script(req: ScriptRequest, session: Session = Depends(db_session)):
     session.add(version_row)
     current.current_version = version
     if content.state == "PLANNING":
-        transition_content(session, content, "SCRIPTING", reason="script v%d" % version)
+        transition_content(session, content, "SCRIPTING", reason=f"script v{version}")
     audit(session, action="pipeline.script", entity_id=str(content.id), entity_type="script_version",
           detail={"version": version, "words": word_count})
     session.commit()
@@ -353,7 +350,8 @@ def produce(req: ProduceVideoRequest, session: Session = Depends(db_session)):
     if req.cost_usd:
         try:
             spend_and_record(session, category="video", amount=req.cost_usd,
-                             content_item_id=content.id, detail={"stage": "video", "mpt_task_id": req.mpt_task_id})
+                             content_item_id=content.id,
+                             detail={"stage": "video", "mpt_task_id": req.mpt_task_id})
         except Exception as exc:
             raise HTTPException(429, f"budget blocked: {exc}") from exc
 
@@ -435,15 +433,16 @@ def quality_control(req: QCRequest, session: Session = Depends(db_session)):
                    threshold_review=req.threshold_review)
     session.add(row)
     if verdict == "AUTO_APPROVED":
-        transition_content(session, content, "READY", reason="QC auto-approved score=%s" % score)
+        transition_content(session, content, "READY", reason=f"QC auto-approved score={score}")
     elif verdict == "REVIEW_OR_REGENERATE":
-        transition_content(session, content, "HUMAN_REVIEW", reason="QC score=%s" % score)
+        transition_content(session, content, "HUMAN_REVIEW", reason=f"QC score={score}")
         from app.models.business import ReviewQueue
 
         session.add(ReviewQueue(content_item_id=content.id, reason="QC", severity="MEDIUM",
-                                payload={"score": float(score), "checks": {k: v["passed"] for k, v in checks.items()}}))
+                                payload={"score": float(score),
+                                         "checks": {k: v["passed"] for k, v in checks.items()}}))
     else:
-        transition_content(session, content, "REJECTED", reason="QC rejected score=%s" % score)
+        transition_content(session, content, "REJECTED", reason=f"QC rejected score={score}")
     audit(session, action="pipeline.qc", entity_id=str(content.id), entity_type="qc_result",
           detail={"verdict": verdict, "score": float(score), "attempt": attempt})
     session.commit()

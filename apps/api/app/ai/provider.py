@@ -13,7 +13,7 @@ from typing import Protocol
 import httpx
 
 
-class AITask(str, Enum):
+class AITask(str, Enum):  # noqa: UP042 — StrEnum is 3.12+; project pins Python 3.11
     DEEP_REASONING = "DEEP_REASONING"
     RESEARCH_SYNTHESIS = "RESEARCH_SYNTHESIS"
     FAST_GENERATION = "FAST_GENERATION"

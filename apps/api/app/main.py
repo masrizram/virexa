@@ -12,6 +12,8 @@ from app.api.routers import (
     pipeline,
     reviews,
     safety,
+)
+from app.api.routers import (
     settings as settings_router,
 )
 from app.core.config import get_settings

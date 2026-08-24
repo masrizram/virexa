@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     s3_secret_access_key: str = Field(default="", alias="S3_SECRET_ACCESS_KEY")
 
     # --- AI providers (OpenAI-compatible) ---
-    openai_compatible_base_url: str = Field(default="https://api.openai.com/v1", alias="OPENAI_COMPATIBLE_BASE_URL")
+    openai_compatible_base_url: str = Field(
+        default="https://api.openai.com/v1", alias="OPENAI_COMPATIBLE_BASE_URL")
     openai_compatible_api_key: str = Field(default="", alias="OPENAI_COMPATIBLE_API_KEY")
     glm_api_key: str = Field(default="", alias="GLM_API_KEY")
     kimi_api_key: str = Field(default="", alias="KIMI_API_KEY")
@@ -54,7 +55,9 @@ class Settings(BaseSettings):
     default_brand_name: str = "default"
 
     def has_ai(self) -> bool:
-        return bool(self.openai_compatible_api_key or self.glm_api_key or self.kimi_api_key or self.ai_allow_mock)
+        return bool(
+            self.openai_compatible_api_key or self.glm_api_key
+            or self.kimi_api_key or self.ai_allow_mock)
 
 
 @lru_cache

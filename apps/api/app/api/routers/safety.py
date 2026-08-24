@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import db_session
 from app.core.safety import SafetyState
 from app.schemas.api import SafetyRequest
-from app.services.state_service import audit, get_safety_state, set_safety_state
+from app.services.state_service import get_safety_state, set_safety_state
 
 router = APIRouter(prefix="/safety", tags=["safety"])
 

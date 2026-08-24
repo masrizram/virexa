@@ -37,7 +37,8 @@ def test_facebook_discussion_hook():
 
 
 def test_unsupported_platform_raises():
-    with pytest.raises(Exception):
+    from app.engines.adaptation import PlatformConstraintError
+    with pytest.raises(PlatformConstraintError):
         adapt_for_platform("myspace", title="T", hook="H", description="D", cta="C", hashtags=[])
 
 

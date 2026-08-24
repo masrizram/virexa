@@ -15,7 +15,7 @@ def test_happy_path_transitions():
         "SCRIPTING", "PRODUCING", "QC", "READY", "SCHEDULED", "PUBLISHING", "PUBLISHED",
         "MEASURING", "COMPLETED",
     ]
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         validate_transition(a, b)  # must not raise
 
 

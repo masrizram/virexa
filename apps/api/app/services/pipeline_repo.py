@@ -1,8 +1,6 @@
 """Pipeline persistence helpers: brands, opportunities, research, content items."""
 from __future__ import annotations
 
-import uuid
-
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -20,8 +18,10 @@ def get_default_brand(session: Session, name: str = "default") -> Brand:
 
 
 def upsert_opportunity(session: Session, brand_id, *, source: str, source_id: str,
-                       topic: str, url: str = "", published_at=None, engagement: dict | None = None,
-                       trend: dict | None = None, raw_metadata: dict | None = None) -> tuple[Opportunity, bool]:
+                       topic: str, url: str = "", published_at=None,
+                       engagement: dict | None = None,
+                       trend: dict | None = None,
+                       raw_metadata: dict | None = None) -> tuple[Opportunity, bool]:
     """Insert opportunity unless (source, source_id) exists. Returns (row, created)."""
     existing = session.execute(
         select(Opportunity).where(

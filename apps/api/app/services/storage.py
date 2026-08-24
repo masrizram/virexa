@@ -5,7 +5,6 @@ PostgreSQL stores metadata only; bytes go to object storage.
 from __future__ import annotations
 
 import hashlib
-import io
 import mimetypes
 from pathlib import Path
 
