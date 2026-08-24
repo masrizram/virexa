@@ -298,6 +298,13 @@ def select_candidate(req: SelectRequest, session: Session = Depends(db_session))
         content = pipeline_repo.create_content_item(
             session, opp.brand_id, title=req.title, opportunity_id=opp.id
         )
+    # A fresh content item starts at DISCOVERED; the select endpoint consolidates
+    # work already done at the opportunity level (research + scoring), so it walks
+    # the legal path DISCOVERED -> RESEARCHING -> RESEARCHED -> SCORED -> SELECTED.
+    if content.state == "DISCOVERED":
+        transition_content(session, content, "RESEARCHING", reason="opportunity already researched")
+        transition_content(session, content, "RESEARCHED", reason="research consolidated")
+        transition_content(session, content, "SCORED", reason="opportunity already scored")
     transition_content(session, content, "SELECTED", reason="selected by scoring")
     audit(session, action="pipeline.select", entity_id=str(content.id), entity_type="content_item",
           outcome="OK", detail={"opportunity_id": str(opp.id), "similarity": similarity})
