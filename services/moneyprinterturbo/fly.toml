@@ -1,25 +1,25 @@
-# MoneyPrinterTurbo on Fly.io — internal service (§16)
-# NOT publicly exposed; reached via virexa-video.internal:8080 by workers/API.
-app = "virexa-video"
-primary_region = "sin"
+# fly.toml app configuration file generated for virexa-video on 2026-08-24T19:31:34+07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'virexa-video'
+primary_region = 'sin'
 
 [build]
-  dockerfile = "Dockerfile"
-
-[env]
-  # MPT config via env — see services/moneyprinterturbo/README
-  WHISPER_METHOD = "none"
-  #TEXT_OVERLAY_METHOD="none"
-
-# Internal-only: no [http_service]; Fly private networking serves :8080 inside the org.
-[[services]]
-  internal_port = 8080
-  protocol = "tcp"
-  # no [[services.ports]] → no public exposure
-
-[[vm]]
-  size = "performance-2x"   # video rendering needs CPU
-  memory = "4gb"
+  dockerfile = 'Dockerfile'
 
 [deploy]
-  strategy = "rolling"
+  strategy = 'rolling'
+
+[env]
+  WHISPER_METHOD = 'none'
+
+[[services]]
+  protocol = 'tcp'
+  internal_port = 8080
+  ports = []
+
+[[vm]]
+  size = 'performance-2x'
+  memory = '4gb'

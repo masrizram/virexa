@@ -1,34 +1,38 @@
-# Virexa Control Center on Fly.io
-app = "virexa-web"
-primary_region = "sin"
+# fly.toml app configuration file generated for virexa-web on 2026-08-24T19:31:51+07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'virexa-web'
+primary_region = 'sin'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
-[build.args]
-  NEXT_PUBLIC_API_BASE_URL = "https://virexa-api.fly.dev"
+  [build.args]
+    NEXT_PUBLIC_API_BASE_URL = 'https://virexa-api.fly.dev'
+
+[deploy]
+  strategy = 'rolling'
 
 [env]
-  NODE_ENV = "production"
+  NODE_ENV = 'production'
 
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = "suspend"
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 1
 
-[[checks]]
-  name = "web-liveness"
-  type = "http"
-  port = 3000
-  path = "/api/ping"
-  interval = "15s"
-  timeout = "5s"
+[checks]
+  [checks.web-liveness]
+    port = 3000
+    type = 'http'
+    interval = '15s'
+    timeout = '5s'
+    path = '/api/ping'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
-
-[deploy]
-  strategy = "rolling"
+  size = 'shared-cpu-1x'
+  memory = '512mb'

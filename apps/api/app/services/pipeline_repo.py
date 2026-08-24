@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.engines.dedup import dedup_hash, is_duplicate
@@ -98,22 +98,30 @@ def check_duplicate_topic(session: Session, brand_id, topic: str) -> tuple[bool,
 def save_research(session: Session, opportunity_id, *, facts: list, key_claims: list,
                   context: dict, content_gaps: list, competition: dict, summary: str,
                   sources: list[dict], depth: str = "STANDARD") -> ResearchItem:
-    item = ResearchItem(
-        opportunity_id=opportunity_id,
-        depth=depth,
-        facts=facts,
-        key_claims=key_claims,
-        context=context,
-        content_gaps=content_gaps,
-        competition=competition,
-        summary=summary,
-        completed_at=None,
-    )
+    # Idempotent upsert: (opportunity_id, depth) is unique — re-research replaces.
+    item = session.execute(
+        select(ResearchItem).where(
+            ResearchItem.opportunity_id == opportunity_id,
+            ResearchItem.depth == depth,
+        )
+    ).scalar_one_or_none()
+    if item is None:
+        item = ResearchItem(opportunity_id=opportunity_id, depth=depth)
+        session.add(item)
+    item.facts = facts
+    item.key_claims = key_claims
+    item.context = context
+    item.content_gaps = content_gaps
+    item.competition = competition
+    item.summary = summary
     from app.models.base import now_utc
 
     item.completed_at = now_utc()
-    session.add(item)
     session.flush()
+    # Replace sources of this research item on re-run (idempotency).
+    session.execute(
+        delete(ResearchSource).where(ResearchSource.research_item_id == item.id)
+    )
     for src in sources:
         session.add(ResearchSource(
             research_item_id=item.id,

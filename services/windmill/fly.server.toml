@@ -1,43 +1,41 @@
-# Windmill Server on Fly.io
-# Built from the official ghcr.io/windmill-labs/windmill image.
-app = "virexa-windmill"
-primary_region = "sin"
+# fly.toml app configuration file generated for virexa-windmill on 2026-08-24T19:19:50+07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'virexa-windmill'
+primary_region = 'sin'
 
 [build]
-  image = "ghcr.io/windmill-labs/windmill:latest"
+  image = 'ghcr.io/windmill-labs/windmill:latest'
+
+[deploy]
+  strategy = 'rolling'
 
 [env]
-  MODE = "server"
-  # Rust worker uses NUM_WORKERS; server process serves UI/API.
-  NUM_WORKERS = "0"
-  # Root workspace superadmin/admin credentials are set via secrets:
-  #   fly secrets set -a virexa-windmill SUPERADMIN_PASSWORD=...
-  # DATABASE_URL is a secret (Neon direct or pooled — decided by §8 runtime evidence).
+  MODE = 'server'
+  NUM_WORKERS = '0'
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = "suspend"
+  auto_stop_machines = 'suspend'
   auto_start_machines = true
   min_machines_running = 1
 
   [http_service.concurrency]
-    type = "requests"
-    soft_limit = 200
+    type = 'requests'
     hard_limit = 250
+    soft_limit = 200
+
+[checks]
+  [checks.windmill-liveness]
+    port = 8000
+    type = 'http'
+    interval = '15s'
+    timeout = '5s'
+    path = '/'
 
 [[vm]]
-  size = "shared-cpu-2x"
-  memory = "2gb"
-
-# Deploy probes: Windmill exposes /api/... ; liveness via GET /
-[[checks]]
-  name = "windmill-liveness"
-  type = "http"
-  port = 8000
-  path = "/"
-  interval = "15s"
-  timeout = "5s"
-
-[deploy]
-  strategy = "rolling"
+  size = 'shared-cpu-2x'
+  memory = '2gb'
