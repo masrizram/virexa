@@ -77,8 +77,10 @@ curl -s https://virexa-api.fly.dev/health
 - E2E dry-run produksi: healthz ✓, safety round-trip ✓, discovery live HackerNews 5 item ✓, score 67.5 ✓.
 - Windmill Fly: server + worker live; worker ping Neon db_latency 4-10ms.
 - MPT (virexa-video.internal:8080): `/ping` 200 dari dalam network; `POST /api/v1/videos`
-  dieksekusi worker — TTS edge sukses (audio.mp3 dihasilkan); gagal di tahap material karena
-  `pexels_api_keys` kosong → **butuh operator set PEXELS_API_KEYS (gratis dari pexels.com/api)**.
+  **end-to-end SUKSES** (bukti 2026-08-24: task c3eceac5 → final-1.mp4 6.7MB + combined-1.mp4
+  6.8MB + audio.mp3 + subtitle.srt). Key Pexels di-set via Fly secret `PEXELS_API_KEYS`
+  (comma-separated untuk multi-key); entrypoint.py merge ENV → config.toml saat startup.
+  Voice Azure format `en-US-AriaNeural` (voice UUID lama TIDAK valid di MPT versi baru).
 
 ## Known operational notes
 

@@ -9,7 +9,11 @@ ENV API_AUTH=false \
 
 WORKDIR /MoneyPrinterTurbo
 
-# Dual-stack bind (::) — Fly private network uses IPv6 6PN addresses.
-CMD ["python", "-m", "uvicorn", "app.asgi:app", "--host", "::", "--port", "8080"]
+# Entrypoint wrapper: merges ENV API keys (PEXELS_API_KEYS etc.) into
+# config.toml at startup — MPT reads config.toml only, no env override exists.
+COPY entrypoint.py /MoneyPrinterTurbo/entrypoint.py
 
-EXPOSE 8080
+# Dual-stack bind (::) — Fly private network uses IPv6 6PN addresses.
+# Shell form so `&&` chains entrypoint + uvicorn; exec replaces the shell so
+# uvicorn receives signals directly (clean stops, no zombie shell).
+CMD python entrypoint.py && exec python -m uvicorn app.asgi:app --host :: --port 8080

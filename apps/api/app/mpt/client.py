@@ -84,7 +84,11 @@ class MPTClient:
     def get_status(self, task_id: str) -> MPTTaskResult:
         data = self._get("/api/v1/tasks/" + task_id, params={"task_id": task_id})
         state = data.get("state", "")
-        videos = list(data.get("videos", []) or []) + list(data.get("combinedVideos", []) or [])
+        # API returns numeric states: -1 = FAILED, 1 = SUCCESS, 4 = processing.
+        state_map = {-1: "FAILED", 1: "COMPLETED", 4: "PROCESSING"}
+        if isinstance(state, (int, float)):
+            state = state_map.get(int(state), "PROCESSING" if int(state) >= 0 else "FAILED")
+        videos = list(data.get("videos", []) or []) + list(data.get("combined_videos", []) or [])
         if not state:
             state = "COMPLETED" if videos else "PENDING"
         return MPTTaskResult(
