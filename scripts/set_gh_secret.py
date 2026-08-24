@@ -13,10 +13,12 @@ import urllib.request
 
 REPO = "masrizram/virexa"
 
-# 1. GitHub token from credential helper
-cred = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
-                      capture_output=True, text=True).stdout
-gh_token = [l.split("=", 1)[1] for l in cred.splitlines() if l.startswith("password=")][0]
+# 1. GitHub token: env GH_TOKEN wins, else git credential helper
+gh_token = os.environ.get("GH_TOKEN")
+if not gh_token:
+    cred = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+                          capture_output=True, text=True).stdout
+    gh_token = [l.split("=", 1)[1] for l in cred.splitlines() if l.startswith("password=")][0]
 
 # 2. Fly deploy token from env
 fly_token = os.environ["FLY_TOKEN"]
