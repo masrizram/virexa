@@ -56,11 +56,37 @@ fly deploy
 ## Daily verification
 
 ```bash
-bash scripts/e2e_dryrun.sh                      # API pipeline (needs API_BASE)
-WM=http://localhost:8001 bash scripts/windmill_smoke.sh   # local windmill
+# Production E2E (bearer auth; token is the SERVICE_TOKEN Fly secret)
+API_BASE=https://virexa-api.fly.dev VIREXA_SERVICE_TOKEN=<token> bash scripts/e2e_dryrun.sh
 fly status -a virexa-api && fly status -a virexa-windmill
-curl -s https://virexa-api.fly.dev/health/deps
+curl -s https://virexa-api.fly.dev/health
 ```
+
+## CI/CD (automatic)
+
+- Push ke `main` → GitHub Actions `deploy` workflow: CI (pytest vs Postgres service) → deploy 5 app
+  Fly paralel (api, windmill server, windmill worker, video, web) → verify smoke (`/healthz`, web, windmill).
+- Token: 5 GitHub secret per-app `FLY_TOKEN_VIREXA_{API,WEB,WINDMILL,WINDMILL_WORKER,VIDEO}`
+  (regenerate: `GH_TOKEN=... python scripts/set_gh_secret.py` — flyctl tokens create per app).
+- CATATAN: `flyctl tokens create deploy --org <org>` TIDAK valid di flyctl v0.4.84 (output usage-error).
+  Gunakan token per-app.
+
+## Runtime evidence (2026-08-24, production)
+
+- virexa-api.fly.dev: `/health` → `ai_configured:true, dry_run:true`; `/ready` → `database:ok` (Neon).
+- E2E dry-run produksi: healthz ✓, safety round-trip ✓, discovery live HackerNews 5 item ✓, score 67.5 ✓.
+- Windmill Fly: server + worker live; worker ping Neon db_latency 4-10ms.
+- MPT (virexa-video.internal:8080): `/ping` 200 dari dalam network; `POST /api/v1/videos`
+  dieksekusi worker — TTS edge sukses (audio.mp3 dihasilkan); gagal di tahap material karena
+  `pexels_api_keys` kosong → **butuh operator set PEXELS_API_KEYS (gratis dari pexels.com/api)**.
+
+## Known operational notes
+
+- MPT API paths: `POST /api/v1/videos`, `GET /api/v1/tasks/{id}`, `GET /ping` (bukan /v1/*).
+- MPT bind dual-stack `::` wajib agar reachable via Fly 6PN `.internal` (IPv6).
+- Windmill Neon: perlu role `windmill_admin/user/password` cluster-wide + GRANT ke runtime role
+  (migrasi Windmill merujuk ketiga role itu; bukti di infra/neon/00_bootstrap.sql).
+- Windmill Fly default login admin@windmill.dev/changeme — **GANTI PASSWORD operator**.
 
 ## Recovery
 

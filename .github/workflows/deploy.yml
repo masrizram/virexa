@@ -54,7 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy services/windmill --config services/windmill/fly.server.toml --strategy rolling --wait-timeout 900
+      - run: flyctl deploy . --config services/windmill/fly.server.toml --strategy rolling --wait-timeout 900
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_WINDMILL }}
 
@@ -64,7 +64,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
-      - run: flyctl deploy services/windmill --config services/windmill/fly.worker.toml --strategy rolling --wait-timeout 900
+      - run: flyctl deploy . --config services/windmill/fly.worker.toml --strategy rolling --wait-timeout 900
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_TOKEN_VIREXA_WINDMILL_WORKER }}
 
