@@ -1,0 +1,37 @@
+# Local Windmill verification stack (WSL docker).
+# Mirrors production topology: separate postgres DB, windmill server, windmill worker.
+# NOT used in production (production = Fly + Neon per spec).
+services:
+  windmill-pg:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: windmill
+      POSTGRES_PASSWORD: windmill_dev
+      POSTGRES_DB: windmill
+    ports:
+      - "55433:5432"
+    volumes:
+      - wm-pgdata:/var/lib/postgresql/data
+
+  windmill-server:
+    image: ghcr.io/windmill-labs/windmill:main
+    depends_on: [windmill-pg]
+    environment:
+      DATABASE_URL: postgres://windmill:windmill_dev@windmill-pg:5432/windmill?sslmode=disable
+      MODE: server
+    ports:
+      - "8001:8000"
+
+  windmill-worker:
+    image: ghcr.io/windmill-labs/windmill:main
+    depends_on: [windmill-pg]
+    environment:
+      DATABASE_URL: postgres://windmill:windmill_dev@windmill-pg:5432/windmill?sslmode=disable
+      MODE: worker
+      NUM_WORKERS: "2"
+      WORKER_GROUP: general
+    ports:
+      - "8002:8000"
+
+volumes:
+  wm-pgdata:

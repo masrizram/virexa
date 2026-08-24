@@ -21,9 +21,10 @@ from fastapi.testclient import TestClient as _TC  # noqa: E402,N813
 def db_engine():
     url = os.environ["APP_DATABASE_URL"]
     engine = make_engine(url, pooled=False)
+    # Tests must NEVER drop the shared dev schema (spec: no destructive runtime
+    # schema mutation). Create tables idempotently; teardown leaves schema intact.
     Base.metadata.create_all(engine)
     yield engine
-    Base.metadata.drop_all(engine)
     engine.dispose()
 
 

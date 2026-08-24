@@ -1,0 +1,43 @@
+# Windmill Server on Fly.io
+# Built from the official ghcr.io/windmill-labs/windmill image.
+app = "virexa-windmill"
+primary_region = "sin"
+
+[build]
+  image = "ghcr.io/windmill-labs/windmill:latest"
+
+[env]
+  MODE = "server"
+  # Rust worker uses NUM_WORKERS; server process serves UI/API.
+  NUM_WORKERS = "0"
+  # Root workspace superadmin/admin credentials are set via secrets:
+  #   fly secrets set -a virexa-windmill SUPERADMIN_PASSWORD=...
+  # DATABASE_URL is a secret (Neon direct or pooled — decided by §8 runtime evidence).
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+# Deploy probes: Windmill exposes /api/... ; liveness via GET /
+[[checks]]
+  name = "windmill-liveness"
+  type = "http"
+  port = 8000
+  path = "/"
+  interval = "15s"
+  timeout = "5s"
+
+[deploy]
+  strategy = "rolling"

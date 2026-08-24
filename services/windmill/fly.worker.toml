@@ -1,0 +1,26 @@
+# Windmill Workers on Fly.io
+# Workers connect to the same Windmill PostgreSQL DB as the server (no direct
+# network path to the server is required). Scale with `fly scale count`.
+app = "virexa-windmill-worker"
+primary_region = "sin"
+
+[build]
+  image = "ghcr.io/windmill-labs/windmill:latest"
+
+[env]
+  MODE = "worker"
+  NUM_WORKERS = "4"          # jobs in parallel per machine
+  WORKER_GROUP = "general"   # tag for scheduling; see §15 worker groups
+  SLEEP_QUEUE = "1000"       # keep worker responsive (avoid autostop pitfalls §48)
+
+# No http_service: workers must NOT be publicly exposed (§4).
+[[vm]]
+  size = "shared-cpu-2x"
+  memory = "2gb"
+
+# Workers have no HTTP port; rely on process-level health via restart policy.
+[deploy]
+  strategy = "rolling"
+
+# Graceful shutdown: Fly sends SIGTERM; Windmill workers finish current jobs
+# before exit. Keep restart_unexpected default true.
