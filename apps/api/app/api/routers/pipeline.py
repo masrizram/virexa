@@ -6,6 +6,7 @@ Each endpoint is idempotent-safe for its stage and writes audit events.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -35,9 +36,11 @@ from app.models.business import (
     Strategy,
     VideoJob,
 )
+from app.mpt.client import MPTClient
 from app.services import pipeline_repo
 from app.services.cost_service import spend_and_record
 from app.services.state_service import audit, get_safety_state, transition_content
+from app.services.storage import StorageService
 
 router = APIRouter(prefix="/pipeline", tags=["pipeline"])
 
@@ -114,6 +117,32 @@ class VideoCompleteRequest(BaseModel):
     assets: list[dict] = Field(default_factory=list)
     error_code: str = ""
     error_message: str = ""
+
+
+class ProduceSyncRequest(BaseModel):
+    """Poll MPT for a video job, download, upload to S3, record Asset (§19/§31/§18)."""
+    video_job_id: uuid.UUID
+    poll_timeout_seconds: float = 60.0
+
+
+def _get_mpt_client() -> MPTClient:
+    from app.core.config import get_settings
+    settings = get_settings()
+    if not settings.mpt_base_url:
+        raise HTTPException(503, "MPT not configured")
+    return MPTClient(settings.mpt_base_url)
+
+
+def _get_storage() -> StorageService:
+    from app.core.config import get_settings
+    settings = get_settings()
+    if not settings.s3_bucket:
+        raise HTTPException(503, "S3 storage not configured")
+    return StorageService(
+        endpoint=settings.s3_endpoint, region=settings.s3_region,
+        bucket=settings.s3_bucket, access_key=settings.s3_access_key_id,
+        secret_key=settings.s3_secret_access_key,
+    )
 
 
 class QCRequest(BaseModel):
@@ -402,6 +431,78 @@ def produce_complete(req: VideoCompleteRequest, session: Session = Depends(db_se
           detail=outcome_detail)
     session.commit()
     return {"video_job_id": str(job.id), "status": job.status}
+
+
+@router.post("/produce/sync")
+def produce_sync(req: ProduceSyncRequest, session: Session = Depends(db_session)):
+    """Poll MPT for a submitted video job; on SUCCESS download the video and
+    persist it to S3 (R2), record Assets, transition PRODUCING -> QC (§31/§18).
+
+    This is the MPT -> storage bridge required by spec §19: business logic in
+    FastAPI, orchestrators only call this endpoint.
+    """
+    job = session.get(VideoJob, req.video_job_id)
+    if job is None:
+        raise HTTPException(404, "video job not found")
+    if job.status == "COMPLETED":
+        return {"video_job_id": str(job.id), "status": "COMPLETED", "assets": job.assets_count
+                if hasattr(job, "assets_count") else None}
+    if not job.mpt_task_id:
+        raise HTTPException(409, "video job has no mpt_task_id")
+
+    mpt = _get_mpt_client()
+    mpt._max_poll_seconds = req.poll_timeout_seconds  # bounded wait for this call
+    try:
+        result = mpt.wait_for_job(job.mpt_task_id)
+    except Exception as exc:  # MPTError incl. TIMEOUT -> job stays RENDERING
+        audit(session, action="pipeline.produce_sync", entity_id=str(job.id),
+              entity_type="video_job", outcome="PENDING",
+              detail={"reason": str(exc)[:200]})
+        session.commit()
+        raise HTTPException(202, f"MPT not finished: {exc}") from exc
+
+    if result.status == "FAILED":
+        job.status = "FAILED"
+        job.error_code = "MPT_FAILED"
+        job.error_message = "MPT task failed"
+        content = session.get(ContentItem, job.content_item_id)
+        if content and content.state == "PRODUCING":
+            transition_content(session, content, "FAILED", reason="MPT render failed")
+        audit(session, action="pipeline.produce_sync", entity_id=str(job.id),
+              entity_type="video_job", outcome="FAILED", detail={"mpt": job.mpt_task_id})
+        session.commit()
+        return {"video_job_id": str(job.id), "status": "FAILED"}
+
+    # SUCCESS: download primary video, upload to S3, record Asset
+    import tempfile
+
+    from app.models.base import now_utc
+
+    storage = _get_storage()
+    created = []
+    with tempfile.TemporaryDirectory() as tmp:
+        local = str(Path(tmp) / "final.mp4")
+        mpt.download_result(result, local)
+        key = f"videos/{job.content_item_id}/{job.id}/final.mp4"
+        info = storage.put_file(local, key, metadata={"mpt_task_id": job.mpt_task_id})
+        session.add(Asset(
+            content_item_id=job.content_item_id, asset_type="video",
+            storage_key=info["storage_key"], storage_uri=info["storage_uri"],
+            checksum=info["checksum"], mime_type=info["mime_type"],
+            size_bytes=info["size_bytes"], video_job_id=job.id,
+        ))
+        created.append(info["storage_key"])
+
+    job.status = "COMPLETED"
+    job.completed_at = now_utc()
+    content = session.get(ContentItem, job.content_item_id)
+    if content and content.state == "PRODUCING":
+        transition_content(session, content, "QC", reason="video synced to storage")
+    audit(session, action="pipeline.produce_sync", entity_id=str(job.id),
+          entity_type="video_job", outcome="OK",
+          detail={"assets": created, "mpt": job.mpt_task_id})
+    session.commit()
+    return {"video_job_id": str(job.id), "status": "COMPLETED", "assets": created}
 
 
 @router.post("/qc")

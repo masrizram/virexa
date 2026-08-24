@@ -121,18 +121,27 @@ class MPTClient:
         return {"ok": True, "videos": result.videos}
 
     def download_result(self, result: MPTTaskResult, dest_path: str) -> str:
+        """Download the primary video via MPT's file endpoint.
+
+        MPT returns paths like /tasks/{id}/final-1.mp4, served under
+        /api/v1/download/{path}. Absolute http(s) URLs are fetched directly.
+        """
         validated = self.validate_output(result)
         url = ""
         for video in validated["videos"]:
-            if video.get("url"):
-                url = video["url"]
+            v = video if isinstance(video, str) else str(video.get("url", ""))
+            if v:
+                url = v
                 break
         if not url:
             raise MPTError("MPT video URL missing", code="VALIDATION")
-        if not url.startswith("http"):
-            raise MPTError("MPT returned non-http video path; fetch via MPT file endpoint",
-                           code="VALIDATION")
-        resp = self._client.get(url, headers=self._headers())
+        if url.startswith("http"):
+            fetch_path = url
+        elif url.startswith("/"):
+            fetch_path = "/api/v1/download" + url
+        else:
+            fetch_path = "/api/v1/download/" + url
+        resp = self._client.get(fetch_path, headers=self._headers())
         if resp.status_code != 200:
             raise MPTError("MPT download status " + str(resp.status_code), code="TRANSIENT")
         with open(dest_path, "wb") as f:
