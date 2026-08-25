@@ -14,6 +14,7 @@ RUN pip install --no-cache-dir uv && uv export --format requirements-txt --no-ha
 COPY app ./app
 COPY alembic ./alembic
 COPY alembic.ini ./
+COPY entrypoint.py ./
 
 # Non-root user
 RUN useradd -m -u 10001 virexa && chown -R virexa:virexa /srv
@@ -24,4 +25,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status==200 else 1)"
 
-CMD ["uvicorn", "app.main:app", "--host", "::", "--port", "8000"]
+CMD ["python", "entrypoint.py"]
