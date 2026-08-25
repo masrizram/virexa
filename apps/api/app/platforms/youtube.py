@@ -5,9 +5,10 @@ Capabilities (verified against YouTube Data API v3):
                    limited live test: smallest safe real publication)
   delete_post    — videos.delete (rollback path for live tests)
   get_metrics    — videos.getRating/statistics via videos.list (part=statistics)
+  read_comments  — commentThreads.list (part=snippet, order=time)
 
 Explicitly unsupported (never faked):
-  schedule_post / read_comments / reply_comment / read_messages / reply_message
+  schedule_post / reply_comment / read_messages / reply_message
   (commentThreads endpoints exist but are not wired yet — do not pretend).
 
 Tokens: access + refresh tokens are passed in by the caller; this adapter never
@@ -49,7 +50,7 @@ class YouTubeAdapter:
     capabilities = Capabilities(
         publish_video=True,
         schedule_post=False,
-        read_comments=False,
+        read_comments=True,
         reply_comment=False,
         read_messages=False,
         reply_message=False,
@@ -183,12 +184,46 @@ class YouTubeAdapter:
             "duration": v.get("contentDetails", {}).get("duration", ""),
         }
 
+    # ------------------------------------------------------------- comments
+    def read_comments(self, platform_post_id: str, *, limit: int = 50) -> list[dict]:
+        """commentThreads.list (part=snippet) for one video, newest-first.
+
+        Requires the force-ssl scope variant of the API key/OAuth used for
+        upload (yt analytics not needed). Returns normalized comments:
+        [{id, author, body, like_count, published_at}] — never faked.
+        """
+        resp = self._http.get(
+            f"{YOUTUBE_API_BASE}commentThreads",
+            params={
+                "part": "snippet",
+                "videoId": platform_post_id,
+                "order": "time",
+                "maxResults": min(max(int(limit), 1), 100),
+                "textFormat": "plainText",
+            },
+            headers={"Authorization": "Bearer " + self._token},
+        )
+        if resp.status_code == 403 and "disabled comments" in resp.text.lower():
+            return []  # comments turned off for the video — not an error
+        if resp.status_code != 200:
+            raise YouTubeError(
+                f"read_comments failed: {resp.status_code} {resp.text[:200]}",
+                status=resp.status_code, reason="READ_COMMENTS_FAILED")
+        out = []
+        for item in resp.json().get("items", []):
+            snip = item.get("snippet", {}).get("topLevelComment", {}).get("snippet", {})
+            out.append({
+                "id": item.get("id", ""),
+                "author": snip.get("authorDisplayName", ""),
+                "body": snip.get("textDisplay", "") or snip.get("textOriginal", ""),
+                "like_count": int(snip.get("likeCount", 0) or 0),
+                "published_at": snip.get("publishedAt", ""),
+            })
+        return out
+
     # ------------------------------------------------------- not supported
     def schedule_post(self, payload: dict, when_utc: str) -> dict:
         raise UnsupportedCapability("youtube adapter does not schedule posts yet")
-
-    def read_comments(self, platform_post_id: str, *, limit: int = 50) -> list[dict]:
-        raise UnsupportedCapability("youtube adapter does not read comments yet")
 
     def reply_comment(self, platform_post_id: str, comment_id: str, text: str) -> dict:
         raise UnsupportedCapability("youtube adapter does not reply to comments yet")

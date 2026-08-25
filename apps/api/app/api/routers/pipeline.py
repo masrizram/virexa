@@ -29,10 +29,12 @@ from app.engines.discovery import (
 from app.models.business import (
     Asset,
     ContentItem,
+    Interaction,
     OpportunityScore,
     PlatformVariant,
     PublishJob,
     QCResult,
+    Response as InteractionResponse,
     Script,
     ScriptVersion,
     Strategy,
@@ -811,3 +813,97 @@ def publish_youtube(req: PublishYouTubeRequest, session: Session = Depends(db_se
             "platform_post_id": job.platform_post_id, "remote_url": job.remote_url,
             "privacy_status": req.privacy_status,
             "remote_verified": metrics.get("platform_post_id") == job.platform_post_id}
+
+class EngagementCollectRequest(BaseModel):
+    """Collect comments/mentions for published posts and classify (spec §36-37).
+
+    Reads real comments via the platform adapter (YouTube commentThreads),
+    classifies each (category/risk/action) and persists interactions + response
+    decisions. Read-only against the platform — no replies are ever sent here.
+    """
+
+    platform: str = "youtube"
+    limit: int = 50
+
+
+@router.post("/engagement/collect")
+def engagement_collect(req: EngagementCollectRequest, session: Session = Depends(db_session)):
+    from app.engines import engagement as engagement_engine
+    from app.platforms.youtube import YouTubeAdapter, YouTubeError
+
+    if req.platform != "youtube":
+        raise HTTPException(400, f"unsupported platform: {req.platform} "
+                                 "(only youtube is wired)")
+
+    # All PUBLISHED youtube posts, newest first
+    jobs = session.execute(
+        select(PublishJob).where(
+            PublishJob.platform == "youtube",
+            PublishJob.status == "PUBLISHED",
+            PublishJob.platform_post_id != "",
+        ).order_by(PublishJob.published_at.desc())
+    ).scalars().all()
+    if not jobs:
+        return {"platform": req.platform, "posts_scanned": 0, "collected": 0,
+                "new": 0, "duplicates": 0, "actions": {}}
+
+    client_id = os.environ.get("YOUTUBE_CLIENT_ID", "")
+    client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
+    refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN", "")
+    if not all([client_id, client_secret, refresh_token]):
+        raise HTTPException(503, "YouTube OAuth not configured "
+                                 "(YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN)")
+
+    tok = YouTubeAdapter.refresh_access_token(refresh_token, client_id, client_secret)
+    adapter = YouTubeAdapter(tok["access_token"])
+
+    collected = new = dupes = 0
+    actions: dict[str, int] = {}
+    errors: list[dict] = []
+    for job in jobs:
+        try:
+            comments = adapter.read_comments(job.platform_post_id, limit=req.limit)
+        except YouTubeError as exc:
+            errors.append({"post": job.platform_post_id, "error": str(exc)[:200]})
+            continue
+        collected += len(comments)
+        for c in comments:
+            existing = session.execute(
+                select(Interaction).where(
+                    Interaction.platform == "youtube",
+                    Interaction.platform_interaction_id == c["id"],
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                dupes += 1
+                continue
+            decision = engagement_engine.classify_and_decide(c["body"])
+            interaction = Interaction(
+                platform="youtube",
+                platform_interaction_id=c["id"],
+                platform_post_id=job.platform_post_id,
+                kind="COMMENT",
+                author_handle=c.get("author", ""),
+                body=c["body"],
+                classification=decision["category"],
+                risk_score=decision["risk"],
+            )
+            session.add(interaction)
+            session.flush()
+            response = InteractionResponse(
+                interaction_id=interaction.id,
+                action=decision["action"],
+                decided_by="policy_engine",
+            )
+            session.add(response)
+            new += 1
+            actions[decision["action"]] = actions.get(decision["action"], 0) + 1
+
+    audit(session, action="pipeline.engagement_collect",
+          entity_type="interaction", outcome="OK",
+          detail={"platform": req.platform, "new": new, "duplicates": dupes,
+                  "posts_scanned": len(jobs), "errors": errors[:5]})
+    session.commit()
+    return {"platform": req.platform, "posts_scanned": len(jobs),
+            "collected": collected, "new": new, "duplicates": dupes,
+            "actions": actions, "errors": errors}

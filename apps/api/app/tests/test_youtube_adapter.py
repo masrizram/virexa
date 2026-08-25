@@ -89,12 +89,12 @@ def test_get_metrics():
 def test_unsupported_capabilities_raise():
     ad = make_adapter(lambda r: httpx.Response(200))
     for fn in (lambda: ad.schedule_post({}, "2026-01-01T00:00:00Z"),
-               lambda: ad.read_comments("v"),
                lambda: ad.reply_comment("v", "c", "hi"),
                lambda: ad.read_messages(),
                lambda: ad.reply_message("c", "hi")):
         with pytest.raises(UnsupportedCapability):
             fn()
+    assert ad.capabilities.read_comments is True
 
 
 def test_publish_init_failure_raises_with_reason():
