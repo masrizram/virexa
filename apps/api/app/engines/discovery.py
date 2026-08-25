@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -120,7 +121,14 @@ def discover_reddit(subreddits: list, *, limit_per_sub: int = 25,
         try:
             resp = httpx.get(url, timeout=timeout, headers=headers, follow_redirects=True)
             if resp.status_code != 200:
-                result.errors.append(f"reddit:{sub}:HTTP {resp.status_code}")
+                # Reddit blocks .json from datacenter IPs (HTTP 403) — fall back
+                # to the public Atom feed (.rss), which stays open. RSS has no
+                # scores; engagement is omitted rather than faked.
+                rss = _discover_reddit_rss(sub, headers=headers, timeout=timeout)
+                if rss is None:
+                    result.errors.append(f"reddit:{sub}:HTTP {resp.status_code}")
+                else:
+                    result.items.extend(rss)
                 continue
             data = resp.json()
             for child in data.get("data", {}).get("children", []):
@@ -141,3 +149,46 @@ def discover_reddit(subreddits: list, *, limit_per_sub: int = 25,
         except Exception as exc:
             result.errors.append(f"reddit:{sub}:{type(exc).__name__}:{exc}")
     return result
+
+
+def _discover_reddit_rss(sub: str, *, headers: dict, timeout: float) -> list:
+    """Atom-feed fallback for one subreddit. Returns [] when the feed is empty;
+    raises nothing (caller records an error if we could not fetch)."""
+    import xml.etree.ElementTree as ET
+
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    url = f"https://www.reddit.com/r/{sub}/top/.rss"
+    try:
+        resp = httpx.get(url, timeout=timeout, headers=headers, follow_redirects=True)
+        if resp.status_code != 200:
+            return None
+        root = ET.fromstring(resp.text)
+    except Exception:
+        return None
+    items: list[DiscoveredItem] = []
+    for entry in root.findall("a:entry", ns):
+        title_el = entry.find("a:title", ns)
+        link_el = entry.find("a:link", ns)
+        updated_el = entry.find("a:updated", ns)
+        title = (title_el.text or "").strip() if title_el is not None else ""
+        link = (link_el.get("href") or "") if link_el is not None else ""
+        if not title or not link:
+            continue
+        # source_id from the post id embedded in the URL (/comments/<id>/…)
+        m = re.search(r"/comments/([a-z0-9]+)/", link)
+        post_id = m.group(1) if m else hashlib.sha1(link.encode()).hexdigest()[:12]
+        published_at = None
+        if updated_el is not None and updated_el.text:
+            try:
+                published_at = datetime.fromisoformat(updated_el.text.replace("Z", "+00:00"))
+            except ValueError:
+                published_at = None
+        items.append(DiscoveredItem(
+            source="reddit",
+            source_id=make_source_id("reddit", post_id),
+            topic=title,
+            url=link,
+            published_at=published_at,
+            engagement={},  # RSS exposes no scores — never fake them
+        ))
+    return items
