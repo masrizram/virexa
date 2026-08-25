@@ -4,7 +4,7 @@
  * lives in FastAPI (spec §19), Windmill only orchestrates.
  *
  * Env (Windmill variables, never hardcoded):
- *   VIRESA_API_BASE  → http://virexa-api.internal:8000 (private) or https://virexa-api.fly.dev
+ *   VIREXA_API_BASE  → http://virexa-api.internal:8000 (private) or https://virexa-api.fly.dev
  *   VIREXA_SERVICE_TOKEN → bearer for the API in staging/production
  */
 export async function api(
