@@ -5,6 +5,8 @@ Each endpoint is idempotent-safe for its stage and writes audit events.
 """
 from __future__ import annotations
 
+import os
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -481,7 +483,6 @@ def produce_sync(req: ProduceSyncRequest, session: Session = Depends(db_session)
         return {"video_job_id": str(job.id), "status": "FAILED"}
 
     # SUCCESS: download primary video, upload to S3, record Asset
-    import tempfile
 
     from app.models.base import now_utc
 
@@ -668,3 +669,145 @@ def publish(req: PublishRequest, session: Session = Depends(db_session)):
 def _require_state(content: ContentItem, allowed: list[str]) -> None:
     if content.state not in allowed:
         raise HTTPException(409, f"content state {content.state} not in {allowed}")
+
+
+class PublishYouTubeRequest(BaseModel):
+    """Limited live test / real publish via official YouTube Data API (§34/§35/§66).
+
+    Uploads the content item's latest video asset to YouTube as unlisted by
+    default, verifies the remote object, and records an idempotent publish job.
+    """
+    content_item_id: uuid.UUID
+    idempotency_key: str
+    title: str = ""
+    description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    privacy_status: str = "unlisted"  # §66: smallest safe real publication
+
+
+@router.post("/publish/youtube")
+def publish_youtube(req: PublishYouTubeRequest, session: Session = Depends(db_session)):
+
+    from app.platforms.youtube import YouTubeAdapter, YouTubeError
+
+    content = session.get(ContentItem, req.content_item_id)
+    if content is None:
+        raise HTTPException(404, "content not found")
+    _require_state(content, ["READY", "SCHEDULED", "PUBLISHING"])
+
+    settings = get_settings()
+    safety = get_safety_state(session)
+    allowed, reason = side_effect_allowed(safety.value, settings.dry_run)
+    if not allowed:
+        audit(session, action="pipeline.publish_youtube", entity_id=str(content.id),
+              outcome="BLOCKED", detail={"reason": reason})
+        session.commit()
+        raise HTTPException(409, f"publish blocked: {reason}")
+
+    # Idempotency by (variant, key): find-or-create the youtube variant first.
+    variant = session.execute(
+        select(PlatformVariant).where(
+            PlatformVariant.content_item_id == content.id,
+            PlatformVariant.platform == "youtube",
+        )
+    ).scalar_one_or_none()
+    if variant is None:
+        variant = PlatformVariant(
+            content_item_id=content.id, platform="youtube",
+            title=req.title or content.title, description=req.description,
+            hashtags=req.tags, payload={},
+        )
+        session.add(variant)
+        session.flush()
+
+    existing_job = session.execute(
+        select(PublishJob).where(
+            PublishJob.variant_id == variant.id,
+            PublishJob.idempotency_key == req.idempotency_key,
+        )
+    ).scalar_one_or_none()
+    if existing_job is not None and existing_job.status == "PUBLISHED":
+        audit(session, action="pipeline.publish_youtube", entity_id=str(existing_job.id),
+              outcome="DUPLICATE_BLOCKED", detail={"idempotency_key": req.idempotency_key})
+        session.commit()
+        return {"publish_job_id": str(existing_job.id), "status": "PUBLISHED",
+                "idempotent_reuse": True}
+
+    # Latest video asset for this content item
+    asset = session.execute(
+        select(Asset).where(Asset.content_item_id == content.id, Asset.asset_type == "video")
+        .order_by(Asset.created_at.desc())
+    ).scalars().first()
+    if asset is None:
+        raise HTTPException(409, "content has no video asset; run produce/sync first")
+
+    # OAuth from env (§ secrets policy): refresh token -> access token
+    client_id = os.environ.get("YOUTUBE_CLIENT_ID", "")
+    client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET", "")
+    refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN", "")
+    if not all([client_id, client_secret, refresh_token]):
+        raise HTTPException(503, "YouTube OAuth not configured "
+                                 "(YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN)")
+
+    tok = YouTubeAdapter.refresh_access_token(refresh_token, client_id, client_secret)
+    adapter = YouTubeAdapter(tok["access_token"])
+
+    # Fetch bytes from S3 and upload
+    storage = _get_storage()
+    with tempfile.TemporaryDirectory() as tmp:
+        local = str(Path(tmp) / "final.mp4")
+        Path(local).write_bytes(storage.get_bytes(asset.storage_key))
+        try:
+            result = adapter.publish_video({
+                "video_path": local,
+                "title": req.title or content.title,
+                "description": req.description,
+                "tags": req.tags,
+                "privacy_status": req.privacy_status,
+            })
+        except YouTubeError as exc:
+            job = existing_job or PublishJob(
+                variant_id=variant.id, idempotency_key=req.idempotency_key,
+                platform="youtube", status="PENDING")
+            session.add(job)
+            job.status = "FAILED"
+            job.error_code = exc.reason or "YOUTUBE_ERROR"
+            job.error_message = str(exc)[:500]
+            from app.models.base import now_utc
+            job.attempts = (job.attempts or 0) + 1
+            job.last_attempt_at = now_utc()
+            audit(session, action="pipeline.publish_youtube", entity_id=str(job.id),
+                  outcome="FAILED", detail={"error_code": job.error_code})
+            session.commit()
+            raise HTTPException(502, f"youtube upload failed: {exc}") from exc
+
+    # Remote verification (§66): metrics call must return the video
+    metrics = adapter.get_metrics(result["platform_post_id"])
+
+    job = existing_job or PublishJob(
+        variant_id=variant.id, idempotency_key=req.idempotency_key,
+        platform="youtube", status="PENDING")
+    session.add(job)
+    job.status = "PUBLISHED"
+    job.platform_post_id = result["platform_post_id"]
+    job.remote_url = result["remote_url"]
+    from app.models.base import now_utc
+    job.attempts = (job.attempts or 0) + 1
+    job.last_attempt_at = now_utc()
+    job.published_at = now_utc()
+
+    if content.state == "READY":
+        transition_content(session, content, "SCHEDULED", reason="publishing")
+    if content.state == "SCHEDULED":
+        transition_content(session, content, "PUBLISHING", reason="publishing")
+    transition_content(session, content, "PUBLISHED", reason="published youtube")
+    audit(session, action="pipeline.publish_youtube", entity_id=str(job.id),
+          entity_type="publish_job", outcome="OK",
+          detail={"platform_post_id": job.platform_post_id,
+                  "privacy": req.privacy_status,
+                  "verified": metrics.get("platform_post_id") == job.platform_post_id})
+    session.commit()
+    return {"publish_job_id": str(job.id), "status": "PUBLISHED",
+            "platform_post_id": job.platform_post_id, "remote_url": job.remote_url,
+            "privacy_status": req.privacy_status,
+            "remote_verified": metrics.get("platform_post_id") == job.platform_post_id}
