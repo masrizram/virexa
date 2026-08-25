@@ -27,10 +27,12 @@ YOUTUBE_UPLOAD_URL = "https://www.googleapis.com/upload/youtube/v3/videos"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3/"
 YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 
-# Scopes required for upload + read stats + delete own uploads.
+# Scopes required for upload + read stats + delete own uploads + read comments.
+# force-ssl is required by commentThreads.list (§36 engagement collection).
 OAUTH_SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 
 UPLOAD_TIMEOUT = httpx.Timeout(60.0, read=600.0)

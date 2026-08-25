@@ -23,8 +23,8 @@ Store the result (Fly):
 Prerequisites on the Google Cloud project (project "virexa"):
   1. YouTube Data API v3 ENABLED (APIs & Services -> Library)
   2. OAuth consent screen: External, status Testing, scopes youtube.upload +
-     youtube.readonly added, and rizkiiramdaniii@gmail.com added as TEST USER
-     (otherwise consent returns access_denied)
+     youtube.readonly + youtube.force-ssl added, and rizkiiramdaniii@gmail.com
+     added as TEST USER (otherwise consent returns access_denied)
   3. OAuth client of type "Desktop app" (loopback ports work out of the box)
 """
 from __future__ import annotations
@@ -44,6 +44,7 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",
 ]
 PORT = 8788
 REDIRECT_URI = f"http://localhost:{PORT}"
