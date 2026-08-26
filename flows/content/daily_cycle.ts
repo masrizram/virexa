@@ -1,28 +1,33 @@
 /**
- * f/content/daily_cycle — master daily flow (spec §22).
- * Orchestration only: each stage calls the Virexa API.
+ * f/content/daily_cycle — master daily flow (spec §22/§57).
  *
- * Modules are individual Windmill scripts (f/content/*); this flow strings them
- * together with error isolation per stage.
+ * Thin orchestrator only (§19): all business logic lives in the Virexa API's
+ * POST /pipeline/run_cycle. The cycle is gated server-side by AUTONOMOUS_MODE
+ * and safety state; this script adds nothing but scheduling and a compact
+ * result summary for the run log.
  */
+import { post } from "../../lib/api";
 
-export async function main(stage: string = "all") {
-  // Stage functions are small, auditable steps. In Windmill this flow calls
-  // the individual scripts f/content/<stage> via `wmill.run_script` or the API.
-  // Kept here as the canonical orchestration order.
-  const order = [
-    "discover",
-    "research",
-    "deduplicate",
-    "score",
-    "select",
-    "strategy",
-    "script",
-    "video",
-    "qc",
-    "adapt",
-    "publish",
-  ];
-  if (stage !== "all") return { order, selected: stage };
-  return { order };
+export async function main(
+  brand: string = "default",
+  limitPerSource: number = 20,
+  minScore: number = 50,
+) {
+  const result = await post("/pipeline/run_cycle", {
+    brand,
+    limit_per_source: limitPerSource,
+    min_score: minScore,
+    platforms: ["youtube", "tiktok"],
+  });
+  // Compact summary: what was created and where content stopped.
+  return {
+    content_item_id: result.content_item_id,
+    title: result.title,
+    state: result.state,
+    created: result.stages?.find((s: Any) => s.stage === "discover")?.created ?? null,
+    note: result.note,
+  };
 }
+
+// deno-lint-ignore no-explicit-any
+type Any = any;

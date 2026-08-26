@@ -160,7 +160,8 @@ def main() -> None:
                 raise
 
     print("3. schedules")
-    # schedules via API: f/content/discovery_daily daily 06:00 UTC, f/system/health hourly
+    # schedules via API: discovery_daily daily 06:00 Asia/Jakarta, health hourly,
+    # daily_cycle daily 06:30 Asia/Jakarta (after discovery; gated by AUTONOMOUS_MODE)
     schedules = [
         {
             "path": "f/content/discovery_daily",
@@ -176,6 +177,14 @@ def main() -> None:
             "timezone": "Asia/Jakarta",
             "enabled": True,
             "script_path": "f/system/health",
+            "args": {},
+        },
+        {
+            "path": "f/content/daily_cycle",
+            "schedule": "0 30 6 * * *",
+            "timezone": "Asia/Jakarta",
+            "enabled": True,
+            "script_path": "f/content/daily_cycle",
             "args": {},
         },
     ]

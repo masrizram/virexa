@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import tempfile
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -20,6 +21,11 @@ from app.core.config import get_settings
 from app.core.safety import side_effect_allowed
 from app.engines import adaptation as adaptation_engine
 from app.engines import qc as qc_engine
+from app.engines.cycle import (
+    SCORING_BASELINE_WEIGHTS,
+    heuristic_factors,
+    save_research_heuristics,
+)
 from app.engines.discovery import (
     ConnectorResult,
     discover_hackernews,
@@ -30,6 +36,7 @@ from app.models.business import (
     Asset,
     ContentItem,
     Interaction,
+    Opportunity,
     OpportunityScore,
     PlatformVariant,
     PublishJob,
@@ -189,6 +196,21 @@ class PublishRequest(BaseModel):
     status: str = "PUBLISHED"  # PUBLISHED / DRY_RUN / FAILED
     error_code: str = ""
     error_message: str = ""
+
+
+class RunCycleRequest(BaseModel):
+    """Autonomous daily cycle input (spec §22/§57).
+
+    Gating: the endpoint refuses to run unless AUTONOMOUS_MODE is enabled AND
+    safety state is RUNNING. DRY_RUN still governs any eventual side effect;
+    this cycle itself performs no external side effects (no publish).
+    """
+
+    brand: str = "default"
+    sources: list[str] | None = None
+    limit_per_source: int = 20
+    min_score: float = 50.0  # sanity floor; scoring is heuristic until AI research lands
+    platforms: list[str] = Field(default_factory=lambda: ["youtube", "tiktok"])
 
 
 @router.post("/discover")
@@ -637,12 +659,14 @@ def publish(req: PublishRequest, session: Session = Depends(db_session)):
             status="PENDING",
         )
         session.add(job)
-    # Idempotency: an existing PUBLISHED job for this key is never re-published.
-    if job.status == "PUBLISHED":
+    # Idempotency: a key already bound to a terminal-state job is never
+    # re-executed — replays return the recorded outcome without bumping
+    # attempts. FAILED stays retryable on purpose (same key = retry).
+    if job.status in ("PUBLISHED", "DRY_RUN"):
         audit(session, action="pipeline.publish", entity_id=str(job.id), outcome="DUPLICATE_BLOCKED",
               detail={"idempotency_key": req.idempotency_key})
         session.commit()
-        return {"publish_job_id": str(job.id), "status": "PUBLISHED", "idempotent_reuse": True}
+        return {"publish_job_id": str(job.id), "status": job.status, "idempotent_reuse": True}
 
     job.status = req.status
     job.platform_post_id = req.platform_post_id
@@ -672,6 +696,199 @@ def publish(req: PublishRequest, session: Session = Depends(db_session)):
     return {"publish_job_id": str(job.id), "status": job.status, "idempotent_reuse": False}
 
 
+@router.post("/run_cycle")
+def run_cycle(req: RunCycleRequest, session: Session = Depends(db_session)):
+    """Autonomous daily cycle (spec §22/§57): discover -> research -> score ->
+    select -> strategy -> script for the best fresh candidate.
+
+    Hard gates (503 unless satisfied): AUTONOMOUS_MODE enabled AND safety
+    state RUNNING. No external side effects are performed here — rendering and
+    publishing stay with the operator/MPT path; DRY_RUN still governs those.
+    Every stage is individually audited; per-stage failures abort with a
+    structured error payload.
+    """
+    settings = get_settings()
+    if not settings.autonomous_mode:
+        raise HTTPException(503, "autonomous mode disabled (set AUTONOMOUS_MODE=true)")
+    safety = get_safety_state(session)
+    if safety.value != "RUNNING":
+        raise HTTPException(503, f"safety state {safety.value} blocks autonomous cycle")
+
+    from app.engines.scoring import compute_score
+
+    stages: list[dict] = []
+
+    # --- 1. discover --------------------------------------------------------
+    brand = pipeline_repo.get_default_brand(session, req.brand)
+    results: list[ConnectorResult] = []
+    sources = req.sources or DISCOVERY_SOURCES_DEFAULT
+    if "hackernews" in sources:
+        results.append(discover_hackernews(limit=req.limit_per_source))
+    for s in sources:
+        if s.startswith("reddit:"):
+            results.append(discover_reddit([s.split(":", 1)[1]], limit_per_sub=req.limit_per_source))
+    if any(s == "rss" for s in sources):
+        results.append(discover_rss(RSS_FEEDS_DEFAULT))
+    created = duplicates = 0
+    errors: list[str] = []
+    for res in results:
+        errors.extend(res.errors)
+        for item in res.items:
+            _, was_created = pipeline_repo.upsert_opportunity(
+                session, brand.id, source=item.source, source_id=item.source_id,
+                topic=item.topic, url=item.url, published_at=item.published_at,
+                engagement=item.engagement, trend=item.trend,
+                raw_metadata=item.raw_metadata,
+            )
+            created += 1 if was_created else 0
+            duplicates += 0 if was_created else 1
+    stages.append({"stage": "discover", "created": created, "duplicates": duplicates,
+                   "errors": errors})
+
+    def _abort(code: str, detail: str) -> HTTPException:
+        return HTTPException(409, f"{code}: {detail}")
+
+    # Candidate rows for this cycle: what discovery just brought in (falls back
+    # to any brand opportunity without a score yet, so a throttled discovery day
+    # still yields candidates).
+    candidates = session.execute(
+        select(Opportunity).where(
+            Opportunity.brand_id == brand.id,
+            Opportunity.discovered_at >= datetime.now(UTC) - timedelta(minutes=5),
+        ).order_by(Opportunity.discovered_at.desc())
+    ).scalars().all()
+    if not candidates:
+        candidates = session.execute(
+            select(Opportunity).where(
+                Opportunity.brand_id == brand.id,
+                Opportunity.id.not_in(select(OpportunityScore.opportunity_id)),
+            ).order_by(Opportunity.discovered_at.desc()).limit(req.limit_per_source * len(sources) or 60)
+        ).scalars().all()
+    if not candidates:
+        raise _abort("NO_CANDIDATES", "discovery produced no new opportunities")
+
+    # --- 2. research + 3. score ---------------------------------------------
+    scored: list[tuple[Opportunity, float]] = []
+    research_errors: list[str] = []
+    factor_keys = list(SCORING_BASELINE_WEIGHTS.keys())
+    for opp in candidates:
+        try:
+            save_research_heuristics(session, opp)
+        except Exception as exc:  # noqa: BLE001 — one bad candidate must not kill the cycle
+            research_errors.append(f"{str(opp.id)[:8]}: {exc}")
+            continue
+        factors = heuristic_factors(session, opp)
+        penalties: dict[str, float] = {"RiskPenalty": 2.0, "SaturationPenalty": 3.0}
+        total, weighted, applied = compute_score(
+            {k: factors[k] for k in factor_keys}, penalties,
+        )
+        last = session.execute(
+            select(OpportunityScore).where(OpportunityScore.opportunity_id == opp.id)
+            .order_by(OpportunityScore.version.desc())
+        ).scalars().first()
+        version = (last.version + 1) if last else 1
+        session.add(OpportunityScore(opportunity_id=opp.id, version=version,
+                                     factors=weighted, penalties=applied, total=total))
+        audit(session, action="pipeline.score", entity_id=str(opp.id), entity_type="opportunity",
+              detail={"total": total, "version": version})
+        scored.append((opp, total))
+    session.commit()
+    stages.append({"stage": "research+score", "scored": len(scored),
+                   "research_errors": research_errors[:5]})
+    if not scored:
+        raise _abort("SCORE_FAILED", "no candidate could be researched/scored")
+
+    # --- 4. select best ------------------------------------------------------
+    scored.sort(key=lambda pair: pair[1], reverse=True)
+    selected_opp = None
+    content = None
+    similarity = 0.0
+    rejected_by_dedup = 0
+    for opp, total in scored:
+        if total < req.min_score:
+            break
+        is_dup, sim, matched = pipeline_repo.check_duplicate_topic(
+            session, opp.brand_id, opp.topic, exclude_opportunity_id=opp.id,
+        )
+        if is_dup:
+            rejected_by_dedup += 1
+            continue
+        item = pipeline_repo.create_content_item(session, opp.brand_id, title=opp.topic,
+                                                 opportunity_id=opp.id)
+        if item.state == "DISCOVERED":
+            transition_content(session, item, "RESEARCHING", reason="cycle consolidated research")
+            transition_content(session, item, "RESEARCHED", reason="cycle consolidated research")
+            transition_content(session, item, "SCORED", reason="cycle scoring done")
+        transition_content(session, item, "SELECTED", reason=f"cycle selected score={total}")
+        audit(session, action="pipeline.select", entity_id=str(item.id), entity_type="content_item",
+              outcome="OK", detail={"opportunity_id": str(opp.id), "similarity": sim,
+                                    "cycle_score": total})
+        selected_opp, content, similarity = opp, item, sim
+        break
+    session.commit()
+    if content is None:
+        raise _abort("SELECT_FAILED",
+                     f"no candidate passed min_score={req.min_score} "
+                     f"(dedup rejections: {rejected_by_dedup})")
+    stages.append({"stage": "select", "opportunity_id": str(selected_opp.id),
+                   "similarity": similarity, "dedup_rejections": rejected_by_dedup})
+
+    # --- 5. strategy ----------------------------------------------------------
+    strategy_row = Strategy(
+        content_item_id=content.id, topic=content.title,
+        angle="explainer of why it matters right now",
+        audience="tech-curious general audience",
+        hook=f"Why everyone is talking about: {content.title}",
+        duration_seconds=30, cta="Follow untuk update teknologi harian.",
+        platforms=req.platforms,
+    )
+    session.add(strategy_row)
+    transition_content(session, content, "PLANNING", reason="cycle strategy created")
+    audit(session, action="pipeline.strategy", entity_id=str(content.id), entity_type="strategy")
+    session.commit()
+    stages.append({"stage": "strategy", "strategy_id": str(strategy_row.id)})
+
+    # --- 6. script -------------------------------------------------------------
+    sections = {
+        "HOOK": strategy_row.hook,
+        "CONTEXT": f"Topik ini ramai dibahas di {selected_opp.source}. Poin utamanya menarik perhatian luas.",
+        "CORE": "Inti masalahnya: apa yang berubah, siapa yang terdampak, dan mengapa sekarang.",
+        "PAYOFF": "Kalau kamu paham ini sekarang, kamu selangkah lebih maju dari kebanyakan orang.",
+        "CTA": strategy_row.cta,
+    }
+    full_text = "\n\n".join(f"[{k}]\n{v}" for k, v in sections.items())
+    word_count = len(full_text.split())
+    current_script = session.execute(
+        select(Script).where(Script.content_item_id == content.id)
+    ).scalar_one_or_none()
+    version = (current_script.current_version + 1) if current_script else 1
+    if current_script is None:
+        current_script = Script(content_item_id=content.id, current_version=0)
+        session.add(current_script)
+    version_row = ScriptVersion(content_item_id=content.id, version=version, sections=sections,
+                                full_text=full_text, word_count=word_count, fact_check={},
+                                created_by="cycle")
+    session.add(version_row)
+    current_script.current_version = version
+    transition_content(session, content, "SCRIPTING", reason=f"cycle script v{version}")
+    audit(session, action="pipeline.script", entity_id=str(content.id), entity_type="script_version",
+          detail={"version": version, "words": word_count})
+    session.commit()
+    stages.append({"stage": "script", "script_version_id": str(version_row.id),
+                   "word_count": word_count})
+
+    return {
+        "brand": req.brand,
+        "content_item_id": str(content.id),
+        "opportunity_id": str(selected_opp.id),
+        "title": content.title,
+        "state": content.state,
+        "note": ("rendering stays manual/MPT until an MPT param-builder lands; "
+                 "submit via /pipeline/produce then /pipeline/produce/sync"),
+        "stages": stages,
+    }
+
+
 def _require_state(content: ContentItem, allowed: list[str]) -> None:
     if content.state not in allowed:
         raise HTTPException(409, f"content state {content.state} not in {allowed}")
@@ -693,7 +910,6 @@ class PublishYouTubeRequest(BaseModel):
 
 @router.post("/publish/youtube")
 def publish_youtube(req: PublishYouTubeRequest, session: Session = Depends(db_session)):
-
     from app.platforms.youtube import YouTubeAdapter, YouTubeError
 
     content = session.get(ContentItem, req.content_item_id)

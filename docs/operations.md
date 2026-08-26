@@ -16,6 +16,17 @@
 | `DRY_RUN` | API | `true`/`false` |
 | `AUTONOMOUS_MODE` | API | `true`/`false` (only after gates pass) |
 
+## Autonomous daily cycle
+
+`POST /pipeline/run_cycle` (Windmill `f/content/daily_cycle`, scheduled 06:30
+Asia/Jakarta) runs discover -> heuristic research -> score -> select ->
+strategy -> script for the best candidate and stops at `SCRIPTING`. Hard
+gates: requires `AUTONOMOUS_MODE=true` AND safety `RUNNING` (else 503).
+Rendering stays with MPT/operator (`/pipeline/produce` + `/produce/sync`);
+publishing additionally honors `DRY_RUN`. Publish idempotency keys are locked
+once a job reaches a terminal status (`PUBLISHED`/`DRY_RUN`); `FAILED` jobs
+remain retryable under the same key.
+
 Full secret list & provisioning order: `.env.example`.
 
 ## Neon bootstrap (operator, once)

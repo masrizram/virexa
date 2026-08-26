@@ -1,10 +1,17 @@
 export const dynamic = "force-dynamic";
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+// Server-side service token (runtime env on the web machine, NOT NEXT_PUBLIC —
+// never shipped to the browser). All non-/health endpoints require it.
+const API_TOKEN = process.env.VIREXA_SERVICE_TOKEN || "";
 
 async function fetchJson<T>(path: string): Promise<T | null> {
   try {
-    const res = await fetch(`${API}${path}`, { cache: "no-store", signal: AbortSignal.timeout(4000) });
+    const res = await fetch(`${API}${path}`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(4000),
+      headers: API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : undefined,
+    });
     if (!res.ok) return null;
     return (await res.json()) as T;
   } catch {
