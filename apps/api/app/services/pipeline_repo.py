@@ -49,17 +49,24 @@ def upsert_opportunity(session: Session, brand_id, *, source: str, source_id: st
     return row, True
 
 
-def recent_topics(session: Session, brand_id, *, days: int = 30, limit: int = 200) -> list[str]:
+def recent_topics(
+    session: Session, brand_id, *, days: int = 30, limit: int = 200,
+    exclude_opportunity_id=None,
+) -> list[str]:
     from datetime import UTC, datetime, timedelta
 
     since = datetime.now(UTC) - timedelta(days=days)
-    rows = session.execute(
+    stmt = (
         select(Opportunity.topic)
         .where(Opportunity.brand_id == brand_id, Opportunity.discovered_at >= since)
         .order_by(Opportunity.discovered_at.desc())
         .limit(limit)
-    ).scalars().all()
-    return list(rows)
+    )
+    # Self-parity guard: the candidate being selected must not match against
+    # itself, or titling content exactly as its own topic always trips dedup.
+    if exclude_opportunity_id is not None:
+        stmt = stmt.where(Opportunity.id != exclude_opportunity_id)
+    return list(session.execute(stmt).scalars().all())
 
 
 def create_content_item(session: Session, brand_id, *, title: str, opportunity_id=None) -> ContentItem:
@@ -91,8 +98,14 @@ def content_history_titles(session: Session, brand_id, *, days: int = 60, limit:
     return list(rows)
 
 
-def check_duplicate_topic(session: Session, brand_id, topic: str) -> tuple[bool, float, str | None]:
-    return is_duplicate(topic, recent_topics(session, brand_id) + content_history_titles(session, brand_id))
+def check_duplicate_topic(
+    session: Session, brand_id, topic: str, *, exclude_opportunity_id=None,
+) -> tuple[bool, float, str | None]:
+    return is_duplicate(
+        topic,
+        recent_topics(session, brand_id, exclude_opportunity_id=exclude_opportunity_id)
+        + content_history_titles(session, brand_id),
+    )
 
 
 def save_research(session: Session, opportunity_id, *, facts: list, key_claims: list,

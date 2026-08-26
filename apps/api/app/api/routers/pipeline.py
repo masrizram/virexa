@@ -288,7 +288,9 @@ def select_candidate(req: SelectRequest, session: Session = Depends(db_session))
     if opp is None:
         raise HTTPException(404, "opportunity not found")
 
-    is_dup, similarity, matched = pipeline_repo.check_duplicate_topic(session, opp.brand_id, req.title)
+    is_dup, similarity, matched = pipeline_repo.check_duplicate_topic(
+        session, opp.brand_id, req.title, exclude_opportunity_id=opp.id,
+    )
     if is_dup:
         audit(session, action="pipeline.select", entity_id=str(opp.id), outcome="REJECTED",
               detail={"reason": "DUPLICATE_TOPIC", "similarity": similarity, "matched": matched})
