@@ -34,11 +34,13 @@ from app.models.business import (
     PlatformVariant,
     PublishJob,
     QCResult,
-    Response as InteractionResponse,
     Script,
     ScriptVersion,
     Strategy,
     VideoJob,
+)
+from app.models.business import (
+    Response as InteractionResponse,
 )
 from app.mpt.client import MPTClient
 from app.services import pipeline_repo

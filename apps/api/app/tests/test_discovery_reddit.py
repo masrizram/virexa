@@ -3,7 +3,6 @@
 Evidence that drove these tests: on Fly sin egress reddit .json is hard-blocked
 (403), and back-to-back requests to .rss get HTTP 429 with an empty body.
 """
-import xml.etree.ElementTree as ET
 
 import httpx
 import pytest
@@ -14,7 +13,6 @@ from app.engines.discovery import (
     discover_reddit,
     make_source_id,
 )
-
 
 ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
