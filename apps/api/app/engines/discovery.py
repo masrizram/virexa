@@ -54,18 +54,22 @@ def _ts_to_utc(ts) -> datetime | None:
 
 # Reddit returns HTTP 429 (empty body) when requests from one IP arrive too
 # close together — observed on Fly sin egress even for the public Atom feed.
+# Recovery needs far more than seconds: in prod a 3s/6s retry ladder still
+# got 429s, while a later request ~1min later succeeded. Discovery runs
+# once daily, so waiting up to ~1min per subreddit is free.
 _REDDIT_MIN_INTERVAL = 3.0
-_REDDIT_429_RETRIES = 2
+_REDDIT_429_BACKOFF = (15.0, 30.0, 60.0)
 
 
 def _reddit_get(url: str, *, headers: dict, timeout: float) -> httpx.Response | None:
-    """GET with Reddit-specific pacing; retries 429 with linear backoff.
+    """GET with Reddit-specific pacing; retries 429 with escalating backoff.
 
     Returns the last response, or None only when every attempt raised.
     """
-    for attempt in range(1 + _REDDIT_429_RETRIES):
+    resp = None
+    for attempt in range(1 + len(_REDDIT_429_BACKOFF)):
         if attempt:
-            time.sleep(_REDDIT_MIN_INTERVAL * attempt)
+            time.sleep(_REDDIT_429_BACKOFF[attempt - 1])
         try:
             resp = httpx.get(url, timeout=timeout, headers=headers,
                              follow_redirects=True)

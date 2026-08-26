@@ -75,12 +75,12 @@ def test_reddit_get_retries_429_then_succeeds(monkeypatch, paced):
     monkeypatch.setattr(
         "app.engines.discovery.httpx.get", lambda url, **kw: next(responses))
 
+    from app.engines.discovery import _REDDIT_429_BACKOFF
     resp = _reddit_get("https://www.reddit.com/r/x/top/.rss",
                        headers={}, timeout=5)
 
     assert resp.status_code == 200
-    # linear backoff after each 429: 1x then 2x the min interval
-    assert paced == [_REDDIT_MIN_INTERVAL, _REDDIT_MIN_INTERVAL * 2]
+    assert paced == list(_REDDIT_429_BACKOFF[:2])
 
 
 def test_reddit_get_gives_up_after_retry_budget(monkeypatch, paced):
