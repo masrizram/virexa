@@ -8,6 +8,7 @@ from __future__ import annotations
 import calendar
 import hashlib
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -49,6 +50,30 @@ def _ts_to_utc(ts) -> datetime | None:
         return datetime.fromtimestamp(float(ts), tz=UTC)
     except (OverflowError, ValueError, TypeError):
         return None
+
+
+# Reddit returns HTTP 429 (empty body) when requests from one IP arrive too
+# close together — observed on Fly sin egress even for the public Atom feed.
+_REDDIT_MIN_INTERVAL = 3.0
+_REDDIT_429_RETRIES = 2
+
+
+def _reddit_get(url: str, *, headers: dict, timeout: float) -> httpx.Response | None:
+    """GET with Reddit-specific pacing; retries 429 with linear backoff.
+
+    Returns the last response, or None only when every attempt raised.
+    """
+    for attempt in range(1 + _REDDIT_429_RETRIES):
+        if attempt:
+            time.sleep(_REDDIT_MIN_INTERVAL * attempt)
+        try:
+            resp = httpx.get(url, timeout=timeout, headers=headers,
+                             follow_redirects=True)
+        except Exception:
+            return None
+        if resp.status_code != 429:
+            return resp
+    return resp
 
 
 def discover_rss(feed_urls: list, *, timeout: float = 15.0) -> ConnectorResult:
@@ -117,16 +142,26 @@ def discover_reddit(subreddits: list, *, limit_per_sub: int = 25,
     result = ConnectorResult()
     headers = {"User-Agent": "virexa-discovery/0.1 (content research)"}
     for sub in subreddits:
+        # Reddit rate-limits per IP aggressively: bursts of back-to-back
+        # requests get HTTP 429 even on the public .rss feed (observed in
+        # prod 26 Aug). Space requests out and retry 429s with backoff.
+        time.sleep(_REDDIT_MIN_INTERVAL)
         url = f"https://www.reddit.com/r/{sub}/top.json?t=day&limit={limit_per_sub}"
         try:
-            resp = httpx.get(url, timeout=timeout, headers=headers, follow_redirects=True)
+            # Single shot: .json is hard-blocked (403) from datacenter IPs, so
+            # spending retry budget here just delays the working RSS fallback.
+            resp = httpx.get(url, timeout=timeout, headers=headers,
+                             follow_redirects=True)
             if resp.status_code != 200:
                 # Reddit blocks .json from datacenter IPs (HTTP 403) — fall back
                 # to the public Atom feed (.rss), which stays open. RSS has no
                 # scores; engagement is omitted rather than faked.
                 rss = _discover_reddit_rss(sub, headers=headers, timeout=timeout)
                 if rss is None:
-                    result.errors.append(f"reddit:{sub}:HTTP {resp.status_code}")
+                    # Report what actually failed: the .json status plus the
+                    # fact that the RSS fallback could not fetch either.
+                    result.errors.append(
+                        f"reddit:{sub}:HTTP {resp.status_code} and .rss fallback failed")
                 else:
                     result.items.extend(rss)
                 continue
@@ -159,8 +194,8 @@ def _discover_reddit_rss(sub: str, *, headers: dict, timeout: float) -> list:
     ns = {"a": "http://www.w3.org/2005/Atom"}
     url = f"https://www.reddit.com/r/{sub}/top/.rss"
     try:
-        resp = httpx.get(url, timeout=timeout, headers=headers, follow_redirects=True)
-        if resp.status_code != 200:
+        resp = _reddit_get(url, headers=headers, timeout=timeout)
+        if resp is None or resp.status_code != 200:
             return None
         root = ET.fromstring(resp.text)
     except Exception:
